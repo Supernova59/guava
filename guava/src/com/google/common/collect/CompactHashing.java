@@ -66,6 +66,24 @@ final class CompactHashing {
   private static final int SHORT_MASK = (1 << Short.SIZE) - 1; // 2^16 - 1 = 65_535
 
   /**
+   * Threshold for determining when to use aggressive growth strategy (4x) vs. conservative
+   * growth (2x) when resizing the hash table.
+   */
+  private static final int SMALL_TABLE_THRESHOLD = 32;
+
+  /**
+   * Growth multiplier for small hash tables (capacity ≤ 32) to reduce expensive rehashing
+   * operations.
+   */
+  private static final int SMALL_TABLE_MULTIPLIER = 4;
+
+  /**
+   * Growth multiplier for large hash tables (capacity > 32) to balance memory usage and
+   * performance.
+   */
+  private static final int LARGE_TABLE_MULTIPLIER = 2;
+
+  /**
    * Returns the power of 2 hashtable size required to hold the expected number of items or the
    * minimum hashtable size, whichever is greater.
    */
@@ -140,7 +158,8 @@ final class CompactHashing {
    * current hashtable size.
    */
   static int newCapacity(int mask) {
-    return ((mask < 32) ? 4 : 2) * (mask + 1);
+    return ((mask < SMALL_TABLE_THRESHOLD) ? SMALL_TABLE_MULTIPLIER : LARGE_TABLE_MULTIPLIER)
+        * (mask + 1);
   }
 
   /** Returns the hash prefix given the current mask. */
