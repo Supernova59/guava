@@ -271,7 +271,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
     int expectedSize = metadata;
     int buckets = CompactHashing.tableSize(expectedSize);
     this.table = CompactHashing.createTable(buckets);
-    setHashTableMask(buckets - 1);
+    metadata = AbstractCompactHashStructure.updateHashTableMaskInMetadata(metadata, buckets - 1);
 
     this.entries = new int[expectedSize];
     this.keys = new Object[expectedSize];
@@ -295,8 +295,11 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
 
   @CanIgnoreReturnValue
   Map<K, V> convertToHashFloodingResistantImplementation() {
-    Map<K, V> newDelegate = createHashFloodingResistantDelegate(hashTableMask() + 1);
-    for (int i = firstEntryIndex(); i >= 0; i = getSuccessor(i)) {
+    Map<K, V> newDelegate = createHashFloodingResistantDelegate(
+        AbstractCompactHashStructure.extractHashTableMask(metadata) + 1);
+    for (int i = AbstractCompactHashStructure.computeFirstEntryIndex(size);
+        i >= 0;
+        i = AbstractCompactHashStructure.computeSuccessor(i, size)) {
       newDelegate.put(key(i), value(i));
     }
     this.table = newDelegate;
@@ -307,17 +310,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
     return newDelegate;
   }
 
-  /** Stores the hash table mask as the number of bits needed to represent an index. */
-  private void setHashTableMask(int mask) {
-    int hashTableBits = Integer.SIZE - Integer.numberOfLeadingZeros(mask);
-    metadata =
-        CompactHashing.maskCombine(metadata, hashTableBits, CompactHashing.HASH_TABLE_BITS_MASK);
-  }
 
-  /** Gets the hash table mask using the stored number of hash table bits. */
-  private int hashTableMask() {
-    return (1 << (metadata & CompactHashing.HASH_TABLE_BITS_MASK)) - 1;
-  }
 
   void incrementModCount() {
     metadata += CompactHashing.MODIFICATION_COUNT_INCREMENT;
@@ -348,7 +341,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
     int newEntryIndex = this.size; // current size, and pointer to the entry to be appended
     int newSize = newEntryIndex + 1;
     int hash = smearedHash(key);
-    int mask = hashTableMask();
+    int mask = AbstractCompactHashStructure.extractHashTableMask(metadata);
     int tableIndex = hash & mask;
     int next = CompactHashing.tableGet(requireTable(), tableIndex);
     if (next == UNSET) { // uninitialized bucket
@@ -481,7 +474,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
       return -1;
     }
     int hash = smearedHash(key);
-    int mask = hashTableMask();
+    int mask = AbstractCompactHashStructure.extractHashTableMask(metadata);
     int next = CompactHashing.tableGet(requireTable(), hash & mask);
     if (next == UNSET) {
       return -1;
@@ -535,7 +528,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
     if (needsAllocArrays()) {
       return NOT_FOUND;
     }
-    int mask = hashTableMask();
+    int mask = AbstractCompactHashStructure.extractHashTableMask(metadata);
     int index =
         CompactHashing.remove(
             key,
@@ -606,11 +599,11 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
   }
 
   int firstEntryIndex() {
-    return isEmpty() ? -1 : 0;
+    return AbstractCompactHashStructure.computeFirstEntryIndex(size);
   }
 
   int getSuccessor(int entryIndex) {
-    return (entryIndex + 1 < size) ? entryIndex + 1 : -1;
+    return AbstractCompactHashStructure.computeSuccessor(entryIndex, size);
   }
 
   /**
@@ -619,7 +612,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
    * index that *was* the next entry that would be looked at.
    */
   int adjustAfterRemove(int indexBeforeRemove, @SuppressWarnings("unused") int indexRemoved) {
-    return indexBeforeRemove - 1;
+    return AbstractCompactHashStructure.computeAdjustedIndex(indexBeforeRemove);
   }
 
   private abstract class Itr<T extends @Nullable Object> implements Iterator<T> {
@@ -847,7 +840,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
         if (needsAllocArrays()) {
           return false;
         }
-        int mask = hashTableMask();
+        int mask = AbstractCompactHashStructure.extractHashTableMask(metadata);
         int index =
             CompactHashing.remove(
                 entry.getKey(),
@@ -1083,7 +1076,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
       resizeEntries(size);
     }
     int minimumTableSize = CompactHashing.tableSize(size);
-    int mask = hashTableMask();
+    int mask = AbstractCompactHashStructure.extractHashTableMask(metadata);
     if (minimumTableSize < mask) { // smaller table size will always be less than current mask
       resizeTable(mask, minimumTableSize, UNSET, UNSET);
     }

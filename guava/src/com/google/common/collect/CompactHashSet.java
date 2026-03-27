@@ -277,14 +277,12 @@ class CompactHashSet<E extends @Nullable Object> extends AbstractSet<E> implemen
 
   /** Stores the hash table mask as the number of bits needed to represent an index. */
   private void setHashTableMask(int mask) {
-    int hashTableBits = Integer.SIZE - Integer.numberOfLeadingZeros(mask);
-    metadata =
-        CompactHashing.maskCombine(metadata, hashTableBits, CompactHashing.HASH_TABLE_BITS_MASK);
+    metadata = AbstractCompactHashStructure.updateHashTableMaskInMetadata(metadata, mask);
   }
 
   /** Gets the hash table mask using the stored number of hash table bits. */
   private int hashTableMask() {
-    return (1 << (metadata & CompactHashing.HASH_TABLE_BITS_MASK)) - 1;
+    return AbstractCompactHashStructure.extractHashTableMask(metadata);
   }
 
   void incrementModCount() {
@@ -520,11 +518,11 @@ class CompactHashSet<E extends @Nullable Object> extends AbstractSet<E> implemen
   }
 
   int firstEntryIndex() {
-    return isEmpty() ? -1 : 0;
+    return AbstractCompactHashStructure.computeFirstEntryIndex(size);
   }
 
   int getSuccessor(int entryIndex) {
-    return (entryIndex + 1 < size) ? entryIndex + 1 : -1;
+    return AbstractCompactHashStructure.computeSuccessor(entryIndex, size);
   }
 
   /**
@@ -533,7 +531,7 @@ class CompactHashSet<E extends @Nullable Object> extends AbstractSet<E> implemen
    * index that *was* the next entry that would be looked at.
    */
   int adjustAfterRemove(int indexBeforeRemove, @SuppressWarnings("unused") int indexRemoved) {
-    return indexBeforeRemove - 1;
+    return AbstractCompactHashStructure.computeAdjustedIndex(indexBeforeRemove);
   }
 
   @Override
