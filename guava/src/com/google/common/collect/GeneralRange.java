@@ -188,7 +188,38 @@ final class GeneralRange<T extends @Nullable Object> implements Serializable {
   }
 
   /**
-   * Returns the intersection of the two ranges, or an empty range if their intersection is empty.
+   * Returns the intersection of this range with another range, or an empty range if their
+   * intersection is empty.
+   *
+   * <p>This method computes the intersection by selecting the most restrictive bounds from
+   * both ranges, correctly handling open vs. closed bounds.
+   *
+   * <p><strong>Algorithm:</strong>
+   * <ul>
+   *   <li><strong>Lower Bound:</strong> If both ranges have lower bounds, select the higher
+   *       endpoint. If endpoints are equal, prefer OPEN bound (more restrictive).
+   *   <li><strong>Upper Bound:</strong> If both ranges have upper bounds, select the lower
+   *       endpoint. If endpoints are equal, prefer OPEN bound (more restrictive).
+   *   <li><strong>Validation:</strong> If lower > upper (or equal with both OPEN), the
+   *       intersection is empty, so construct an empty range [upper, upper).
+   * </ul>
+   *
+   * <p><strong>Examples:</strong>
+   * <ul>
+   *   <li>[1, 5] intersect [3, 7] = [3, 5]
+   *   <li>[1, 5) intersect [5, 10] = empty (disjoint)
+   *   <li>[1, 5] intersect [3...) = [3, 5]
+   *   <li>(-..., 10) intersect [5, 20) = [5, 10)
+   * </ul>
+   *
+   * <p><strong>Time Complexity:</strong> O(1) - only performs constant-time comparisons.
+   * <p><strong>Space Complexity:</strong> O(1) - returns a new GeneralRange object with fixed size.
+   *
+   * @param other the range to intersect with this range (must use the same comparator)
+   * @return a new GeneralRange representing the intersection of both ranges. May be empty
+   *         if the ranges do not overlap
+   * @throws NullPointerException if other is null
+   * @throws IllegalArgumentException if other uses a different comparator
    */
   @SuppressWarnings("nullness") // TODO(cpovirk): Add casts as needed. Will be noisy and annoying...
   GeneralRange<T> intersect(GeneralRange<T> other) {

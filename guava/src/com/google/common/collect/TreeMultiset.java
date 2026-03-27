@@ -126,15 +126,14 @@ public final class TreeMultiset<E extends @Nullable Object> extends AbstractSort
    */
   private transient @Nullable TreeMultiset<E> deserializationReplacement;
 
-  private TreeMultiset(
-      Reference<AvlNode<E>> rootReference, GeneralRange<E> range, AvlNode<E> endLink) {
+  TreeMultiset(Reference<AvlNode<E>> rootReference, GeneralRange<E> range, AvlNode<E> endLink) {
     super(range.comparator());
     this.rootReference = rootReference;
     this.range = range;
     this.header = endLink;
   }
 
-  private TreeMultiset(Comparator<? super E> comparator) {
+  TreeMultiset(Comparator<? super E> comparator) {
     super(comparator);
     this.range = GeneralRange.all(comparator);
     this.header = new AvlNode<>();
@@ -244,7 +243,7 @@ public final class TreeMultiset<E extends @Nullable Object> extends AbstractSort
     return Ints.saturatedCast(aggregateForEntries(Aggregate.DISTINCT));
   }
 
-  private static int distinctElements(@Nullable AvlNode<?> node) {
+  static int distinctElements(@Nullable AvlNode<?> node) {
     return (node == null) ? 0 : node.distinctElements;
   }
 
@@ -309,6 +308,25 @@ public final class TreeMultiset<E extends @Nullable Object> extends AbstractSort
     return result[0];
   }
 
+  /**
+   * Sets the count of the given element to the specified value, returning the old count.
+   * 
+   * <p>This method atomically updates the occurrence count for the specified element in the
+   * multiset. If the element is not within the range of this multiset, the operation fails unless
+   * the new count is zero (which represents removing the element).
+   *
+   * <p>Algorithm: Uses AVL tree operations for efficient O(log n) lookup and update. For empty
+   * trees with positive count, delegates to add(). Otherwise traverses the tree to find and
+   * update the node, maintaining the AVL balance invariant.
+   *
+   * <p>Time Complexity: O(log n) where n is the number of distinct elements.
+   * <p>Space Complexity: O(1) auxiliary space.
+   *
+   * @param element the element for which to set the count
+   * @param count the desired number of occurrences (must be non-negative)
+   * @return the former count of the element (zero if the element was not present)
+   * @throws IllegalArgumentException if count is negative or element is out of range (unless count is 0)
+   */
   @CanIgnoreReturnValue
   @Override
   public int setCount(@ParametricNullness E element, int count) {
@@ -331,6 +349,29 @@ public final class TreeMultiset<E extends @Nullable Object> extends AbstractSort
     return result[0];
   }
 
+  /**
+   * Sets the count of the given element to newCount if the current count is oldCount,
+   * returning whether the operation succeeded.
+   *
+   * <p>This method provides atomic compare-and-swap (CAS) semantics for count updates. It only
+   * modifies the count if the current occurrence count exactly matches the expected oldCount.
+   * This enables thread-safe conditional updates without explicit external synchronization.
+   *
+   * <p>Algorithm: For empty trees, returns true only if oldCount==0 (element not present).
+   * For non-empty trees, recursively attempts the CAS operation in the AVL tree structure.
+   * The operation succeeds and returns true only if actual count equals oldCount.
+   *
+   * <p>Time Complexity: O(log n) for tree traversal. Potential AVL rebalancing may occur.
+   * <p>Space Complexity: O(1) auxiliary space.
+   *
+   * @param element the element whose count should be conditionally updated
+   * @param oldCount the expected current count of the element
+   * @param newCount the desired new count (must be non-negative)
+   * @return true if the count matched oldCount and the update succeeded; false if the
+   *         actual count did not match oldCount
+   * @throws IllegalArgumentException if oldCount or newCount is negative, or if element
+   *         is outside the range bounds
+   */
   @CanIgnoreReturnValue
   @Override
   public boolean setCount(@ParametricNullness E element, int oldCount, int newCount) {
@@ -454,8 +495,8 @@ public final class TreeMultiset<E extends @Nullable Object> extends AbstractSort
   @Override
   Iterator<Entry<E>> entryIterator() {
     return new Iterator<Entry<E>>() {
-      private @Nullable AvlNode<E> current = firstNode();
-      private @Nullable Entry<E> prevEntry;
+      @Nullable AvlNode<E> current = firstNode();
+      @Nullable Entry<E> prevEntry;
 
       @Override
       public boolean hasNext() {
@@ -497,8 +538,8 @@ public final class TreeMultiset<E extends @Nullable Object> extends AbstractSort
   @Override
   Iterator<Entry<E>> descendingEntryIterator() {
     return new Iterator<Entry<E>>() {
-      private @Nullable AvlNode<E> current = lastNode();
-      private @Nullable Entry<E> prevEntry = null;
+      @Nullable AvlNode<E> current = lastNode();
+      @Nullable Entry<E> prevEntry = null;
 
       @Override
       public boolean hasNext() {
