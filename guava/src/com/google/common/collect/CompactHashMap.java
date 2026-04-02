@@ -115,130 +115,12 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
 
   private static final Object NOT_FOUND = new Object();
 
-  /**
-   * Maximum allowed false positive probability of detecting a hash flooding attack given random
-   * input.
-   */
-  @VisibleForTesting(
-      )
-  static final double HASH_FLOODING_FPP = 0.001;
-
-  /**
-   * Maximum allowed length of a hash table bucket before falling back to a j.u.LinkedHashMap-based
-   * implementation. Experimentally determined.
-   */
-  private static final int MAX_HASH_BUCKET_LENGTH = 9;
-
-  // The way the `table`, `entries`, `keys`, and `values` arrays work together is as follows.
-  //
-  // The `table` array always has a size that is a power of 2. The hashcode of a key in the map
-  // is masked in order to correspond to the current table size. For example, if the table size
-  // is 128 then the mask is 127 == 0x7f, keeping the bottom 7 bits of the hash value.
-  // If a key hashes to 0x89abcdef the mask reduces it to 0x89abcdef & 0x7f == 0x6f. We'll call this
-  // the "short hash".
-  //
-  // The `keys`, `values`, and `entries` arrays always have the same size as each other. They can be
-  // seen as fields of an imaginary `Entry` object like this:
-  //
-  // class Entry {
-  //    int hash;
-  //    Entry next;
-  //    K key;
-  //    V value;
-  // }
-  //
-  // The imaginary `hash` and `next` values are combined into a single `int` value in the `entries`
-  // array. The top bits of this value are the remaining bits of the hash value that were not used
-  // in the short hash. We saw that a mask of 0x7f would keep the 7-bit value 0x6f from a full
-  // hashcode of 0x89abcdef. The imaginary `hash` value would then be the remaining top 25 bits,
-  // 0x89abcd80. To this is added (or'd) the `next` value, which is an index within `entries`
-  // (and therefore within `keys` and `values`) of another entry that has the same short hash
-  // value. In our example, it would be another entry for a key whose short hash is also 0x6f.
-  //
-  // Essentially, then, `table[h]` gives us the start of a linked list in `entries`, where every
-  // element of the list has the short hash value h.
-  //
-  // A wrinkle here is that the value 0 (called UNSET in the code) is used as the equivalent of a
-  // null pointer. If `table[h] == 0` that means there are no keys in the map whose short hash is h.
-  // If the `next` bits in `entries[i]` are 0 that means there are no further entries for the given
-  // short hash. But 0 is also a valid index in `entries`, so we add 1 to these indices before
-  // putting them in `table` or in `next` bits, and subtract 1 again when we need an index value.
-  //
-  // The elements of `keys`, `values`, and `entries` are added sequentially, so that elements 0 to
-  // `size() - 1` are used and remaining elements are not. This makes iteration straightforward.
-  // Removing an entry generally involves moving the last element of each array to where the removed
-  // entry was, and adjusting index links accordingly.
-
-  /**
-   * The hashtable object. This can be either:
-   *
-   * <ul>
-   *   <li>a byte[], short[], or int[], with size a power of two, created by
-   *       CompactHashing.createTable, whose values are either
-   *       <ul>
-   *         <li>UNSET, meaning "null pointer"
-   *         <li>one plus an index into the keys, values, and entries arrays
-   *       </ul>
-   *   <li>another java.util.Map delegate implementation. In most modern JDKs, normal java.util hash
-   *       collections intelligently fall back to a binary search tree if hash table collisions are
-   *       detected. Rather than going to all the trouble of reimplementing this ourselves, we
-   *       simply switch over to use the JDK implementation wholesale if probable hash flooding is
-   *       detected, sacrificing the compactness guarantee in very rare cases in exchange for much
-   *       more reliable worst-case behavior.
-   *   <li>null, if no entries have yet been added to the map
-   * </ul>
-   */
-  private transient @Nullable Object table;
-
-  /**
-   * Contains the logical entries, in the range of [0, size()). The high bits of each int are the
-   * part of the smeared hash of the key not covered by the hashtable mask, whereas the low bits are
-   * the "next" pointer (pointing to the next entry in the bucket chain), which will always be less
-   * than or equal to the hashtable mask.
-   *
-   * <pre>
-   * hash  = aaaaaaaa
-   * mask  = 00000fff
-   * next  = 00000bbb
-   * entry = aaaaabbb
-   * </pre>
-   *
-   * <p>The pointers in [size(), entries.length) are all "null" (UNSET).
-   */
-  @VisibleForTesting transient int @Nullable [] entries;
-
-  /**
-   * The keys of the entries in the map, in the range of [0, size()). The keys in [size(),
-   * keys.length) are all {@code null}.
-   */
-  @VisibleForTesting transient @Nullable Object @Nullable [] keys;
-
-  /**
-   * The values of the entries in the map, in the range of [0, size()). The values in [size(),
-   * values.length) are all {@code null}.
-   */
-  @VisibleForTesting transient @Nullable Object @Nullable [] values;
-
-  /**
-   * Keeps track of metadata like the number of hash table bits and modifications of this data
-   * structure (to make it possible to throw ConcurrentModificationException in the iterator). Note
-   * that we choose not to make this volatile, so we do less of a "best effort" to track such
-   * errors, for better performance.
-   *
-   * <p>For a new instance, where the arrays above have not yet been allocated, the value of {@code
-   * metadata} is the size that the arrays should be allocated with. Once the arrays have been
-   * allocated, the value of {@code metadata} combines the number of bits in the "short hash", in
-   * its bottom {@value CompactHashing#HASH_TABLE_BITS_MAX_BITS} bits, with a modification count in
-   * the remaining bits that is used to detect concurrent modification during iteration.
-   */
-  private transient int metadata;
-
-  /** The number of elements contained in the set. */
-  private transient int size;
+  // Storage delegates
+  private transient CompactHashMapStorage<K, V> storage;
 
   /** Constructs a new empty instance of {@code CompactHashMap}. */
   CompactHashMap() {
-    init(CompactHashing.DEFAULT_SIZE);
+    this.storage = new CompactHashMapStorage<>(CompactHashing.DEFAULT_SIZE);
   }
 
   /**
@@ -247,73 +129,85 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
    * @param expectedSize the initial capacity of this {@code CompactHashMap}.
    */
   CompactHashMap(int expectedSize) {
-    init(expectedSize);
+    this.storage = new CompactHashMapStorage<>(expectedSize);
   }
 
   /** Pseudoconstructor for serialization support. */
   void init(int expectedSize) {
-    Preconditions.checkArgument(expectedSize >= 0, "Expected size must be >= 0");
-
-    // Save expectedSize for use in allocArrays()
-    this.metadata = Ints.constrainToRange(expectedSize, 1, CompactHashing.MAX_SIZE);
+    this.storage = new CompactHashMapStorage<>(expectedSize);
   }
 
   /** Returns whether arrays need to be allocated. */
   boolean needsAllocArrays() {
-    return table == null;
+    return storage.needsAllocArrays();
   }
 
   /** Handle lazy allocation of arrays. */
   @CanIgnoreReturnValue
   int allocArrays() {
-    Preconditions.checkState(needsAllocArrays(), "Arrays already allocated");
-
-    int expectedSize = metadata;
-    int buckets = CompactHashing.tableSize(expectedSize);
-    this.table = CompactHashing.createTable(buckets);
-    metadata = AbstractCompactHashStructure.updateHashTableMaskInMetadata(metadata, buckets - 1);
-
-    this.entries = new int[expectedSize];
-    this.keys = new Object[expectedSize];
-    this.values = new Object[expectedSize];
-
-    return expectedSize;
+    return storage.allocArrays();
   }
 
   @SuppressWarnings("unchecked")
   @VisibleForTesting
   @Nullable Map<K, V> delegateOrNull() {
-    if (table instanceof Map) {
-      return (Map<K, V>) table;
-    }
-    return null;
+    return storage.delegateOrNull();
+  }
+
+  Object requireTable() {
+    return storage.requireTable();
+  }
+
+  int[] requireEntries() {
+    return storage.requireEntries();
+  }
+
+  @Nullable
+  Object[] requireKeys() {
+    return storage.requireKeys();
+  }
+
+  @Nullable
+  Object[] requireValues() {
+    return storage.requireValues();
+  }
+
+  int entry(int index) {
+    return storage.entry(index);
+  }
+
+  void setEntry(int index, int value) {
+    storage.setEntry(index, value);
+  }
+
+  K key(int index) {
+    return storage.key(index);
+  }
+
+  void setKey(int index, K value) {
+    storage.setKey(index, value);
+  }
+
+  @Nullable
+  V value(int index) {
+    return storage.value(index);
+  }
+
+  void setValue(int index, @Nullable V value) {
+    storage.setValue(index, value);
   }
 
   Map<K, V> createHashFloodingResistantDelegate(int tableSize) {
-    return new LinkedHashMap<>(tableSize, 1.0f);
+    return CompactHashMapSerialization.createHashFloodingResistantDelegate(tableSize);
   }
 
   @CanIgnoreReturnValue
   Map<K, V> convertToHashFloodingResistantImplementation() {
-    Map<K, V> newDelegate = createHashFloodingResistantDelegate(
-        AbstractCompactHashStructure.extractHashTableMask(metadata) + 1);
-    for (int i = AbstractCompactHashStructure.computeFirstEntryIndex(size);
-        i >= 0;
-        i = AbstractCompactHashStructure.computeSuccessor(i, size)) {
-      newDelegate.put(key(i), value(i));
-    }
-    this.table = newDelegate;
-    this.entries = null;
-    this.keys = null;
-    this.values = null;
-    incrementModCount();
-    return newDelegate;
+    return CompactHashMapSerialization.convertToHashFloodingResistantImplementation(this, storage);
   }
 
-
-
   void incrementModCount() {
-    metadata += CompactHashing.MODIFICATION_COUNT_INCREMENT;
+    storage.incrementModCount();
   }
 
   /**
@@ -327,67 +221,13 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
   @CanIgnoreReturnValue
   @Override
   public @Nullable V put(@ParametricNullness K key, @ParametricNullness V value) {
-    if (needsAllocArrays()) {
-      allocArrays();
+    Object result = CompactHashMapMutations.put(key, value, storage, this);
+    if (result == CompactHashMapMutations.NOT_FOUND) {
+      return null;
     }
-    Map<K, V> delegate = delegateOrNull();
-    if (delegate != null) {
-      return delegate.put(key, value);
-    }
-    int[] entries = requireEntries();
-    @Nullable Object[] keys = requireKeys();
-    @Nullable Object[] values = requireValues();
-
-    int newEntryIndex = this.size; // current size, and pointer to the entry to be appended
-    int newSize = newEntryIndex + 1;
-    int hash = smearedHash(key);
-    int mask = AbstractCompactHashStructure.extractHashTableMask(metadata);
-    int tableIndex = hash & mask;
-    int next = CompactHashing.tableGet(requireTable(), tableIndex);
-    if (next == UNSET) { // uninitialized bucket
-      if (newSize > mask) {
-        // Resize and add new entry
-        mask = resizeTable(mask, CompactHashing.newCapacity(mask), hash, newEntryIndex);
-      } else {
-        CompactHashing.tableSet(requireTable(), tableIndex, newEntryIndex + 1);
-      }
-    } else {
-      int entryIndex;
-      int entry;
-      int hashPrefix = CompactHashing.getHashPrefix(hash, mask);
-      int bucketLength = 0;
-      do {
-        entryIndex = next - 1;
-        entry = entries[entryIndex];
-        if (CompactHashing.getHashPrefix(entry, mask) == hashPrefix
-            && Objects.equals(key, keys[entryIndex])) {
-          @SuppressWarnings("unchecked") // known to be a V
-          V oldValue = (V) values[entryIndex];
-
-          values[entryIndex] = value;
-          accessEntry(entryIndex);
-          return oldValue;
-        }
-        next = CompactHashing.getNext(entry, mask);
-        bucketLength++;
-      } while (next != UNSET);
-
-      if (bucketLength >= MAX_HASH_BUCKET_LENGTH) {
-        return convertToHashFloodingResistantImplementation().put(key, value);
-      }
-
-      if (newSize > mask) {
-        // Resize and add new entry
-        mask = resizeTable(mask, CompactHashing.newCapacity(mask), hash, newEntryIndex);
-      } else {
-        entries[entryIndex] = CompactHashing.maskCombine(entry, newEntryIndex + 1, mask);
-      }
-    }
-    resizeMeMaybe(newSize);
-    insertEntry(newEntryIndex, key, value, hash, mask);
-    this.size = newSize;
-    incrementModCount();
-    return null;
+    @SuppressWarnings("unchecked")
+    V oldValue = (V) result;
+    return oldValue;
   }
 
   /**
@@ -417,9 +257,9 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
    * the current capacity.
    */
   void resizeEntries(int newCapacity) {
-    this.entries = Arrays.copyOf(requireEntries(), newCapacity);
-    this.keys = Arrays.copyOf(requireKeys(), newCapacity);
-    this.values = Arrays.copyOf(requireValues(), newCapacity);
+    storage.entries = Arrays.copyOf(requireEntries(), newCapacity);
+    storage.keys = Arrays.copyOf(requireKeys(), newCapacity);
+    storage.values = Arrays.copyOf(requireValues(), newCapacity);
   }
 
   @CanIgnoreReturnValue
@@ -464,32 +304,13 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
       }
     }
 
-    this.table = newTable;
-    setHashTableMask(newMask);
+    storage.table = newTable;
+    storage.setHashTableMask(newMask);
     return newMask;
   }
 
   private int indexOf(@Nullable Object key) {
-    if (needsAllocArrays()) {
-      return -1;
-    }
-    int hash = smearedHash(key);
-    int mask = AbstractCompactHashStructure.extractHashTableMask(metadata);
-    int next = CompactHashing.tableGet(requireTable(), hash & mask);
-    if (next == UNSET) {
-      return -1;
-    }
-    int hashPrefix = CompactHashing.getHashPrefix(hash, mask);
-    do {
-      int entryIndex = next - 1;
-      int entry = entry(entryIndex);
-      if (CompactHashing.getHashPrefix(entry, mask) == hashPrefix
-          && Objects.equals(key, key(entryIndex))) {
-        return entryIndex;
-      }
-      next = CompactHashing.getNext(entry, mask);
-    } while (next != UNSET);
-    return -1;
+    return CompactHashMapInternals.indexOf(key, storage);
   }
 
   @Override
@@ -516,39 +337,8 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
   @SuppressWarnings("unchecked") // known to be a V
   @Override
   public @Nullable V remove(@Nullable Object key) {
-    Map<K, V> delegate = delegateOrNull();
-    if (delegate != null) {
-      return delegate.remove(key);
-    }
-    Object oldValue = removeHelper(key);
-    return (oldValue == NOT_FOUND) ? null : (V) oldValue;
-  }
-
-  private @Nullable Object removeHelper(@Nullable Object key) {
-    if (needsAllocArrays()) {
-      return NOT_FOUND;
-    }
-    int mask = AbstractCompactHashStructure.extractHashTableMask(metadata);
-    int index =
-        CompactHashing.remove(
-            key,
-            /* value= */ null,
-            mask,
-            requireTable(),
-            requireEntries(),
-            requireKeys(),
-            /* values= */ null);
-    if (index == -1) {
-      return NOT_FOUND;
-    }
-
-    Object oldValue = value(index);
-
-    moveLastEntry(index, mask);
-    size--;
-    incrementModCount();
-
-    return oldValue;
+    Object result = CompactHashMapMutations.remove(key, storage);
+    return (V) result;
   }
 
   /**
@@ -599,11 +389,11 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
   }
 
   int firstEntryIndex() {
-    return AbstractCompactHashStructure.computeFirstEntryIndex(size);
+    return AbstractCompactHashStructure.computeFirstEntryIndex(storage.size);
   }
 
   int getSuccessor(int entryIndex) {
-    return AbstractCompactHashStructure.computeSuccessor(entryIndex, size);
+    return AbstractCompactHashStructure.computeSuccessor(entryIndex, storage.size);
   }
 
   /**
@@ -616,7 +406,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
   }
 
   private abstract class Itr<T extends @Nullable Object> implements Iterator<T> {
-    int expectedMetadata = metadata;
+    int expectedMetadata = storage.metadata;
     int currentIndex = firstEntryIndex();
     int indexToRemove = -1;
 
@@ -656,7 +446,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
     }
 
     private void checkForConcurrentModification() {
-      if (metadata != expectedMetadata) {
+      if (storage.metadata != expectedMetadata) {
         throw new ConcurrentModificationException();
       }
     }
@@ -669,7 +459,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
     if (delegate != null) {
       delegate.replaceAll(function);
     } else {
-      for (int i = 0; i < size; i++) {
+      for (int i = 0; i < storage.size; i++) {
         setValue(i, function.apply(key(i), value(i)));
       }
     }
@@ -700,7 +490,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
       Map<K, V> delegate = delegateOrNull();
       return (delegate != null)
           ? delegate.keySet().toArray()
-          : ObjectArrays.copyAsObjectArray(requireKeys(), 0, size);
+          : ObjectArrays.copyAsObjectArray(requireKeys(), 0, storage.size);
     }
 
     @Override
@@ -716,15 +506,17 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
       Map<K, V> delegate = delegateOrNull();
       return (delegate != null)
           ? delegate.keySet().toArray(a)
-          : ObjectArrays.toArrayImpl(requireKeys(), 0, size, a);
+          : ObjectArrays.toArrayImpl(requireKeys(), 0, storage.size, a);
     }
 
     @Override
     public boolean remove(@Nullable Object o) {
       Map<K, V> delegate = delegateOrNull();
-      return (delegate != null)
-          ? delegate.keySet().remove(o)
-          : CompactHashMap.this.removeHelper(o) != NOT_FOUND;
+      if (delegate != null) {
+        return delegate.keySet().remove(o);
+      }
+      Object result = CompactHashMapMutations.remove(o, storage);
+      return result != null;
     }
 
     @Override
@@ -741,7 +533,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
       return (delegate != null)
           ? delegate.keySet().spliterator()
           : Spliterators.spliterator(
-              requireKeys(), 0, size, Spliterator.DISTINCT | Spliterator.ORDERED);
+              requireKeys(), 0, storage.size, Spliterator.DISTINCT | Spliterator.ORDERED);
     }
 
     @Override
@@ -814,7 +606,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
       return (delegate != null)
           ? delegate.entrySet().spliterator()
           : CollectSpliterators.indexed(
-              size, Spliterator.DISTINCT | Spliterator.ORDERED, MapEntry::new);
+              storage.size, Spliterator.DISTINCT | Spliterator.ORDERED, MapEntry::new);
     }
 
     @Override
@@ -840,7 +632,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
         if (needsAllocArrays()) {
           return false;
         }
-        int mask = AbstractCompactHashStructure.extractHashTableMask(metadata);
+        int mask = AbstractCompactHashStructure.extractHashTableMask(storage.metadata);
         int index =
             CompactHashing.remove(
                 entry.getKey(),
@@ -855,7 +647,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
         }
 
         moveLastEntry(index, mask);
-        size--;
+        storage.size--;
         incrementModCount();
 
         return true;
@@ -946,7 +738,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
   @Override
   public int size() {
     Map<K, V> delegate = delegateOrNull();
-    return (delegate != null) ? delegate.size() : size;
+    return (delegate != null) ? delegate.size() : storage.size;
   }
 
   @Override
@@ -960,7 +752,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
     if (delegate != null) {
       return delegate.containsValue(value);
     }
-    for (int i = 0; i < size; i++) {
+    for (int i = 0; i < storage.size; i++) {
       if (Objects.equals(value, value(i))) {
         return true;
       }
@@ -1011,7 +803,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
       Map<K, V> delegate = delegateOrNull();
       return (delegate != null)
           ? delegate.values().spliterator()
-          : Spliterators.spliterator(requireValues(), 0, size, Spliterator.ORDERED);
+          : Spliterators.spliterator(requireValues(), 0, storage.size, Spliterator.ORDERED);
     }
 
     @Override
@@ -1022,7 +814,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
       Map<K, V> delegate = delegateOrNull();
       return (delegate != null)
           ? delegate.values().toArray()
-          : ObjectArrays.copyAsObjectArray(requireValues(), 0, size);
+          : ObjectArrays.copyAsObjectArray(requireValues(), 0, storage.size);
     }
 
     @Override
@@ -1038,7 +830,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
       Map<K, V> delegate = delegateOrNull();
       return (delegate != null)
           ? delegate.values().toArray(a)
-          : ObjectArrays.toArrayImpl(requireValues(), 0, size, a);
+          : ObjectArrays.toArrayImpl(requireValues(), 0, storage.size, a);
     }
   }
 
@@ -1068,15 +860,15 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
     if (delegate != null) {
       Map<K, V> newDelegate = createHashFloodingResistantDelegate(size());
       newDelegate.putAll(delegate);
-      this.table = newDelegate;
+      storage.table = newDelegate;
       return;
     }
-    int size = this.size;
+    int size = storage.size;
     if (size < requireEntries().length) {
       resizeEntries(size);
     }
     int minimumTableSize = CompactHashing.tableSize(size);
-    int mask = AbstractCompactHashStructure.extractHashTableMask(metadata);
+    int mask = AbstractCompactHashStructure.extractHashTableMask(storage.metadata);
     if (minimumTableSize < mask) { // smaller table size will always be less than current mask
       resizeTable(mask, minimumTableSize, UNSET, UNSET);
     }
@@ -1084,24 +876,7 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
 
   @Override
   public void clear() {
-    if (needsAllocArrays()) {
-      return;
-    }
-    incrementModCount();
-    Map<K, V> delegate = delegateOrNull();
-    if (delegate != null) {
-      metadata =
-          Ints.constrainToRange(size(), CompactHashing.DEFAULT_SIZE, CompactHashing.MAX_SIZE);
-      delegate.clear(); // invalidate any iterators left over!
-      table = null;
-      size = 0;
-    } else {
-      Arrays.fill(requireKeys(), 0, size, null);
-      Arrays.fill(requireValues(), 0, size, null);
-      CompactHashing.tableClear(requireTable());
-      Arrays.fill(requireEntries(), 0, size, 0);
-      this.size = 0;
-    }
+    CompactHashMapMutations.clear(storage);
   }
 
   @J2ktIncompatible
@@ -1143,54 +918,4 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
    * In an ideal world, we would document why we know those things are true every time we call these
    * methods. But that is a bit too painful....
    */
-
-  private Object requireTable() {
-    return requireNonNull(table);
-  }
-
-  private int[] requireEntries() {
-    return requireNonNull(entries);
-  }
-
-  private @Nullable Object[] requireKeys() {
-    return requireNonNull(keys);
-  }
-
-  private @Nullable Object[] requireValues() {
-    return requireNonNull(values);
-  }
-
-  /*
-   * The following methods are safe to call as long as the conditions in the *previous* comment are
-   * met *and* the index is less than size().
-   *
-   * (The above explains when these methods are safe from a `nullness` perspective. From an
-   * `unchecked` perspective, they're safe because we put only K/V elements into each array.)
-   */
-
-  @SuppressWarnings("unchecked")
-  private K key(int i) {
-    return (K) requireKeys()[i];
-  }
-
-  @SuppressWarnings("unchecked")
-  private V value(int i) {
-    return (V) requireValues()[i];
-  }
-
-  private int entry(int i) {
-    return requireEntries()[i];
-  }
-
-  private void setKey(int i, K key) {
-    requireKeys()[i] = key;
-  }
-
-  private void setValue(int i, V value) {
-    requireValues()[i] = value;
-  }
-
-  private void setEntry(int i, int value) {
-    requireEntries()[i] = value;
-  }
 }
