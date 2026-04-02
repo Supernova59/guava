@@ -115,8 +115,11 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
 
   private static final Object NOT_FOUND = new Object();
 
-  // Storage delegates
+  // Delegate to external storage (outside base class since it's Map-specific)
   private transient CompactHashMapStorage<K, V> storage;
+
+  // Note: All hash table structure management (table, entries, elements, metadata, size)
+  // is now inherited from AbstractCompactHash to eliminate duplication with CompactHashSet
 
   /** Constructs a new empty instance of {@code CompactHashMap}. */
   CompactHashMap() {
