@@ -51,9 +51,55 @@ class CompactHashMapMutations {
   private CompactHashMapMutations() {}
 
   /**
-   * Inserts or updates an entry in the map.
+   * Result of searching for an existing entry.
+   */
+  private static class EntrySearchResult {
+    final int entryIndex; // -1 if not found
+    final int bucketLength;
+    final Object oldValue; // null if not found
+    final int nextPointer;
+    final int hashPrefix;
+
+    EntrySearchResult(int entryIndex, int bucketLength, Object oldValue, int nextPointer, int hashPrefix) {
+      this.entryIndex = entryIndex;
+      this.bucketLength = bucketLength;
+      this.oldValue = oldValue;
+      this.nextPointer = nextPointer;
+      this.hashPrefix = hashPrefix;
+    }
+  }
+
+  /**
+   * Searches for an entry with the given key in the bucket chain.
+   */
+  private static <K extends @Nullable Object, V extends @Nullable Object> EntrySearchResult findExistingEntry(
+      @Nullable Object key, int next, int mask, CompactHashMapStorage<K, V> storage) {
+    int hashPrefix = CompactHashing.getHashPrefix(Hashing.smearedHash(key), mask);
+    int bucketLength = 0;
+    int lastEntryIndex = -1;
+
+    while (next != UNSET) {
+      int entryIndex = next - 1;
+      int entry = storage.entry(entryIndex);
+      if (CompactHashing.getHashPrefix(entry, mask) == hashPrefix
+          && Objects.equals(key, storage.key(entryIndex))) {
+        // Key found!
+        return new EntrySearchResult(entryIndex, bucketLength, storage.value(entryIndex), next, hashPrefix);
+      }
+      lastEntryIndex = entryIndex;
+      next = CompactHashing.getNext(entry, mask);
+      bucketLength++;
+    }
+
+    // Key not found
+    return new EntrySearchResult(-1, bucketLength, NOT_FOUND, UNSET, hashPrefix);
+  }
+
+  /**
+   * Inserts or updates an entry in the map with robust validation.
    *
    * @return the old value, or NOT_FOUND if the key was not present
+   * @throws IllegalStateException if storage state is corrupt
    */
   @CanIgnoreReturnValue
   static <K extends @Nullable Object, V extends @Nullable Object> @Nullable Object put(
@@ -61,6 +107,11 @@ class CompactHashMapMutations {
       V value,
       CompactHashMapStorage<K, V> storage,
       java.util.Map<K, V> parent) {
+    // Validate storage state
+    if (storage == null) {
+      throw new IllegalArgumentException("Storage cannot be null");
+    }
+    
     if (storage.needsAllocArrays()) {
       storage.allocArrays();
     }
@@ -69,8 +120,14 @@ class CompactHashMapMutations {
       return delegate.put(key, value);
     }
 
-    int newEntryIndex = storage.size; // current size, and pointer to the entry to be appended
+    int newEntryIndex = storage.size;
     int newSize = newEntryIndex + 1;
+    
+    // Validate size bounds
+    if (newSize < 0) {
+      throw new IllegalStateException("Map size overflow: cannot add more entries");
+    }
+    
     int hash = smearedHash(key);
     int mask = AbstractCompactHashStructure.extractHashTableMask(storage.metadata);
     int tableIndex = hash & mask;
@@ -78,7 +135,6 @@ class CompactHashMapMutations {
 
     if (next == UNSET) { // uninitialized bucket
       if (newSize > mask) {
-        // Resize and add new entry
         mask =
             CompactHashMapInternals.resizeTable(
                 storage, mask, CompactHashing.newCapacity(mask), hash, newEntryIndex);
@@ -92,6 +148,9 @@ class CompactHashMapMutations {
       int bucketLength = 0;
       do {
         entryIndex = next - 1;
+        if (entryIndex < 0 || entryIndex >= storage.requireEntries().length) {
+          throw new IllegalStateException("Corrupted hash table: invalid entry index " + entryIndex);
+        }
         entry = storage.entry(entryIndex);
         if (CompactHashing.getHashPrefix(entry, mask) == hashPrefix
             && Objects.equals(key, storage.key(entryIndex))) {
@@ -110,7 +169,6 @@ class CompactHashMapMutations {
       }
 
       if (newSize > mask) {
-        // Resize and add new entry
         mask =
             CompactHashMapInternals.resizeTable(
                 storage, mask, CompactHashing.newCapacity(mask), hash, newEntryIndex);
