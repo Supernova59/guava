@@ -12,12 +12,12 @@
  * the License.
  */
 
-package com.google.common.html;
-
 /**
- * @deprecated Use {@link com.google.common.escape.html.HtmlEscapers} instead.
+ * HTML escaping utilities.
+ *
+ * @since 15.0
  */
-@Deprecated
-public final class HtmlEscapers extends com.google.common.escape.html.HtmlEscapers {
-  private HtmlEscapers() {}
-}
+@GwtCompatible
+package com.google.common.escape.html;
+
+import com.google.common.annotations.GwtCompatible;
