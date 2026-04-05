@@ -118,8 +118,9 @@ class CompactHashMap<K extends @Nullable Object, V extends @Nullable Object>
   // Delegate to external storage (outside base class since it's Map-specific)
   private transient CompactHashMapStorage<K, V> storage;
 
-  // Note: All hash table structure management (table, entries, elements, metadata, size)
-  // is now inherited from AbstractCompactHash to eliminate duplication with CompactHashSet
+  // Note: Hash table structure management and complex operations (resizing, entry management,
+  // serialization) are delegated to specialized helper classes (Internals, Mutations, Serialization)
+  // to share common patterns with CompactHashSet via parallel class architecture.
 
   /** Constructs a new empty instance of {@code CompactHashMap}. */
   CompactHashMap() {
